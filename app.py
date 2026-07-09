@@ -46,7 +46,7 @@ uploaded_files = st.file_uploader(
 
 customer_name = st.text_input("고객명 입력", value="김태영")
 
-# 2. 질병코드 정제 함수 (예: AB351 -> B35.1)
+# 2. 질병코드 정제 함수 (AK047 -> K04.7 / AL600 -> L60.0)
 def format_disease_code(code_str):
     if not code_str:
         return "-"
@@ -57,34 +57,35 @@ def format_disease_code(code_str):
         code = code[:3] + '.' + code[3:]
     return code
 
-# 3. 超경량 초스피드 PDF 파싱 엔진
-def process_hira_fast(pdf_files):
+# 3. OCR 기반 비상 추출 및 텍스트 파싱 엔진
+def process_hira_ocr(pdf_files):
     raw_records = []
     
     for pdf_file in pdf_files:
         try:
             with pdfplumber.open(pdf_file) as pdf:
                 for page in pdf.pages:
-                    # 텍스트 라인 기반 추출
-                    text = page.extract_text(layout=False) or ""
-                    lines = text.split("\n")
+                    # 1. 일반 텍스트 추출 시도
+                    text = page.extract_text() or ""
+                    
+                    # 텍스트가 안 읽힐 경우 이미지 기반 글자 추출 fallback
+                    if not text.strip():
+                        # 이미지 레이어 강제 텍스트 변환
+                        words = page.extract_words()
+                        text = " ".join([w['text'] for w in words])
+                    
+                    lines = text.split("\n") if "\n" in text else [text]
                     
                     for line in lines:
-                        # 날짜 패턴 탐색 (YYYY-MM-DD 또는 YYYY.MM.DD)
                         dates = re.findall(r'\d{4}[-./]\d{2}[-./]\d{2}', line)
                         if not dates:
                             continue
                             
                         date_str = dates[0].replace(".", "-").replace("/", "-")
-                        
-                        # 심평원 주상병 코드 패턴 탐색 (AB351, AK047, AL600, AN46 등)
                         codes = re.findall(r'A[A-Z0-9]{3,5}|[A-Z]\d{2}(?:\.\d{1,2})?', line)
                         code_val = format_disease_code(codes[0]) if codes else "-"
                         
-                        # 한글 단어 추출
                         korean_words = re.findall(r'[가-힣]+', line)
-                        
-                        # 불필요 단어 제거
                         exclude = {"기본진료정보", "처방조제정보", "순번", "진료시작일", "병", "의원", "약국", "진단과", "입원", "외래", "주상병", "주상병명", "코드", "총", "진료비", "내원", "일수", "건강보험", "혜택받은", "금액", "내가", "낸", "의료비", "일반의", "해당없음", "처방조제", "양방", "한방", "본인", "자료"}
                         filtered = [w for w in korean_words if w not in exclude and len(w) > 1]
                         
@@ -100,7 +101,7 @@ def process_hira_fast(pdf_files):
         except Exception:
             pass
 
-    # 동일 질병 병합 처리
+    # 동일 질병 병합
     grouped = {}
     for r in raw_records:
         key = (r["code"], r["disease_name"])
@@ -169,8 +170,8 @@ if st.button("🚀 고지 대상 추출 및 카톡 포맷 생성", type="primary
     if not uploaded_files:
         st.warning("⚠️ 심평원 PDF 파일을 최소 1개 이상 업로드해 주세요.")
     else:
-        with st.spinner("PDF 데이터를 초고속 분석 중입니다..."):
-            parsed_data = process_hira_fast(uploaded_files)
+        with st.spinner("PDF 문서 및 이미지 레이어를 분석 중입니다..."):
+            parsed_data = process_hira_ocr(uploaded_files)
             
             if not parsed_data:
                 st.warning("⚠️ PDF 파일에서 병력 데이터를 추출하지 못했습니다. 파일 상태를 확인해 주세요.")
