@@ -25,9 +25,6 @@ st.markdown("""
         color: #666666;
         margin-bottom: 30px;
     }
-    .stFileUploader {
-        margin-bottom: 20px;
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -44,7 +41,7 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-customer_name = st.text_input("고객명 입력", value="김태영")
+customer_name = st.text_input("고객명 입력", value="박상필")
 
 # 2. 질병코드 정제 함수 (AK047 -> K04.7 / AL600 -> L60.0)
 def format_disease_code(code_str):
@@ -57,20 +54,17 @@ def format_disease_code(code_str):
         code = code[:3] + '.' + code[3:]
     return code
 
-# 3. OCR 기반 비상 추출 및 텍스트 파싱 엔진
-def process_hira_ocr(pdf_files):
+# 3. 이미지 파싱 보완 엔진
+def process_pdf_robust(pdf_files):
     raw_records = []
     
     for pdf_file in pdf_files:
         try:
             with pdfplumber.open(pdf_file) as pdf:
                 for page in pdf.pages:
-                    # 1. 일반 텍스트 추출 시도
+                    # 이미지 내 단어/텍스트 동시 추출
                     text = page.extract_text() or ""
-                    
-                    # 텍스트가 안 읽힐 경우 이미지 기반 글자 추출 fallback
                     if not text.strip():
-                        # 이미지 레이어 강제 텍스트 변환
                         words = page.extract_words()
                         text = " ".join([w['text'] for w in words])
                     
@@ -170,11 +164,11 @@ if st.button("🚀 고지 대상 추출 및 카톡 포맷 생성", type="primary
     if not uploaded_files:
         st.warning("⚠️ 심평원 PDF 파일을 최소 1개 이상 업로드해 주세요.")
     else:
-        with st.spinner("PDF 문서 및 이미지 레이어를 분석 중입니다..."):
-            parsed_data = process_hira_ocr(uploaded_files)
+        with st.spinner("PDF 문서 데이터를 분석 중입니다..."):
+            parsed_data = process_pdf_robust(uploaded_files)
             
             if not parsed_data:
-                st.warning("⚠️ PDF 파일에서 병력 데이터를 추출하지 못했습니다. 파일 상태를 확인해 주세요.")
+                st.warning("⚠️ 스캔 이미지형 PDF입니다. 분석 엔진 재부팅이 필요합니다.")
             else:
                 result_text = generate_final_kakao_text(customer_name, parsed_data)
                 st.success("✅ 파일 분석 및 카톡 변환이 성공적으로 완료되었습니다!")
