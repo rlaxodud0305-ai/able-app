@@ -8,9 +8,33 @@ st.set_page_config(
     layout="centered"
 )
 
-# Title & Header
-st.title("🏥 에이블지점 알릴의무 자동 변환 시스템")
-st.caption("심평원 PDF 서류를 업로드하면 카카오톡 전달용 포맷으로 자동 변환됩니다.")
+# --- 디자인 커스텀 CSS ---
+st.markdown("""
+    <style>
+    /* 제목 스타일: 글자 크기를 줄여 한 줄로 고정 */
+    .main-title {
+        font-size: 28px !important;
+        font-weight: 700 !important;
+        color: #1E1E1E;
+        margin-bottom: 5px;
+        line-height: 1.2;
+    }
+    /* 보조 설명 스타일 */
+    .sub-caption {
+        font-size: 15px !important;
+        color: #666666;
+        margin-bottom: 30px;
+    }
+    /* 업로드 박스 간격 조절 */
+    .stFileUploader {
+        margin-bottom: 20px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# --- 상단 타이틀 섹션 ---
+st.markdown("<div class='main-title'>🏥 에이블지점 알릴의무 자동 변환 시스템</div>", unsafe_allow_html=True)
+st.markdown("<div class='sub-caption'>심평원 PDF 서류를 업로드하면 카카오톡 전달용 포맷으로 자동 변환됩니다.</div>", unsafe_allow_html=True)
 st.markdown("---")
 
 # 1. 파일 업로드 UI
@@ -22,7 +46,8 @@ with col1:
 with col2:
     drug_pdf = st.file_uploader("2. 처방조제정보 PDF", type=["pdf"])
 
-customer_name = st.text_input("고객명 입력", value="우정민")
+# 기본 표시되는 고객명을 '김태영'으로 변경했습니다.
+customer_name = st.text_input("고객명 입력", value="김태영")
 
 # 2. 파싱 및 카톡 포맷 생성 로직
 def generate_final_kakao_text(name, disclosure_items):
@@ -57,7 +82,7 @@ if st.button("🚀 고지 대상 추출 및 카톡 포맷 생성", type="primary
             # 샘플 데이터 테스트 및 카톡 포맷 출력
             sample_data = [
                 {"period": "2022-02-05 ~ 2022-02-06", "disease_name": "근육의 기타 명시된 장애", "code": "M62.89", "treatment_type": "입원", "treatment_days": "입원 6일", "status": "완치", "medication": "13일"},
-                {"period": "2022-04-01 ~ 2022-04-07", "disease_name": "바이러스가 확인된 코로나19", "code": "U07.1", "treatment_type": "통원", "treatment_days": "통원 3일", "status": "완치", "medication": "30일 (동일질병 합산 30일 이상)"},
+                {"period": "2022-04-01 ~ 2022-04-07", "disease_name": "바이러스가 확인된 코로나19", "code": "U07.1", "treatment_type": "통원", "treatment_days": "통원 3일", "status": "완치", "medication": "30일 (동일질배 합산 30일 이상)"},
                 {"period": "2023-01-10 ~ 2023-01-11", "disease_name": "천공 또는 농양이 없는 위장관 출혈", "code": "K57.92", "treatment_type": "입원", "treatment_days": "입원 6일", "status": "완치", "medication": "13일"},
                 {"period": "2023-07-26 ~ 2024-03-14", "disease_name": "기타 정상임신의 관리 및 검진", "code": "Z34.89", "treatment_type": "통원", "treatment_days": "통원 23일 (동일질병 합산 7일 이상)", "status": "완치 (출산 완료)", "medication": "211일 (동일질병 합산 30일 이상)"},
                 {"period": "2024-03-07", "disease_name": "전치태반 분만", "code": "O44.06", "treatment_type": "입원", "treatment_days": "입원 1일 (제왕절개 분만)", "status": "완치", "medication": "7일"},
