@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pdfplumber
+from pypdf import PdfReader
 import re
 
 # 페이지 기본 설정
@@ -46,7 +47,7 @@ uploaded_files = st.file_uploader(
 
 customer_name = st.text_input("고객명 입력", value="김태영")
 
-# 2. 질병코드 정제 함수 (예: AK047 -> K04.7 / AL600 -> L60.0 / AB351 -> B35.1)
+# 2. 질병코드 정제 함수 (AK047 -> K04.7, AL600 -> L60.0)
 def format_disease_code(code_str):
     if not code_str:
         return "-"
@@ -57,72 +58,86 @@ def format_disease_code(code_str):
         code = code[:3] + '.' + code[3:]
     return code
 
-# 3. 보방형 PDF 데이터 추출 엔진
+# 3. pypdf + pdfplumber 하이브리드 파싱 엔진
+def extract_all_text_from_pdf(pdf_file):
+    full_text = ""
+    # 1차 시도: pypdf (강력한 텍스트 리더)
+    try:
+        reader = PdfReader(pdf_file)
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                full_text += t + "\n"
+    except Exception:
+        pass
+    
+    # 2차 시도: pdfplumber 보완
+    if len(full_text.strip()) < 50:
+        try:
+            pdf_file.seek(0)
+            with pdfplumber.open(pdf_file) as pdf:
+                for page in pdf.pages:
+                    t = page.extract_text()
+                    if t:
+                        full_text += t + "\n"
+        except Exception:
+            pass
+            
+    return full_text
+
 def process_hira_pdfs(pdf_files):
     raw_records = []
     
     for pdf_file in pdf_files:
-        with pdfplumber.open(pdf_file) as pdf:
-            for page in pdf.pages:
-                # 텍스트 추출
-                text = page.extract_text()
-                if not text:
-                    continue
+        pdf_text = extract_all_text_from_pdf(pdf_file)
+        lines = pdf_text.split("\n")
+        
+        for line in lines:
+            # YYYY-MM-DD 날짜 검색
+            dates = re.findall(r'\b\d{4}[-./]\d{2}[-./]\d{2}\b', line)
+            if not dates:
+                continue
                 
-                # 줄 단위 분할
-                lines = text.split("\n")
-                for line in lines:
-                    # 날짜(YYYY-MM-DD 또는 YYYY.MM.DD) 검색
-                    dates = re.findall(r'\d{4}[-./]\d{2}[-./]\d{2}', line)
-                    if not dates:
-                        continue
-                    
-                    date_str = dates[0].replace(".", "-").replace("/", "-")
-                    
-                    # 질병코드 탐색 (A로 시작하는 알파벳+숫자 조합 또는 일반 질병코드)
-                    codes = re.findall(r'A[A-Z0-9]{3,5}|[A-Z]\d{2}(?:\.\d{1,2})?', line)
-                    code_val = format_disease_code(codes[0]) if codes else "-"
-                    
-                    # 한글 단어 추출
-                    korean_words = re.findall(r'[가-힣]+', line)
-                    
-                    # 무의미한 단어 제외
-                    exclude_words = {"기본진료정보", "처방조제정보", "순번", "진료시작일", "병", "의원", "약국", "진단과", "입원", "외래", "주상병", "주상병명", "코드", "총", "진료비", "내원", "일수", "건강보험", "혜택받은", "금액", "내가", "낸", "의료비", "일반의", "해당없음", "처방조제", "양방", "한방"}
-                    filtered = [w for w in korean_words if w not in exclude_words and len(w) > 1]
-                    
-                    disease_name = " ".join(filtered[:2]) if filtered else "상세 진환명 확인"
-                    treatment_type = "입원" if "입원" in line else "통원"
-                    
-                    raw_records.append({
-                        "date": date_str,
-                        "code": code_val,
-                        "disease_name": disease_name,
-                        "treatment_type": treatment_type
-                    })
+            date_str = dates[0].replace(".", "-").replace("/", "-")
+            
+            # 질병코드 검색
+            codes = re.findall(r'A[A-Z0-9]{3,5}|[A-Z]\d{2}(?:\.\d{1,2})?', line)
+            code_val = format_disease_code(codes[0]) if codes else "-"
+            
+            # 한글 진단명 추출
+            korean_words = re.findall(r'[가-힣]+', line)
+            exclude = {"기본진료정보", "처방조제정보", "순번", "진료시작일", "병", "의원", "약국", "진단과", "입원", "외래", "주상병", "주상병명", "코드", "총", "진료비", "내원", "일수", "건강보험", "혜택받은", "금액", "내가", "낸", "의료비", "일반의", "해당없음", "처방조제", "양방", "한방"}
+            filtered = [w for w in korean_words if w not in exclude and len(w) > 1]
+            
+            disease_name = " ".join(filtered[:2]) if filtered else "진료 내역 확인"
+            treatment_type = "입원" if "입원" in line else "통원"
+            
+            raw_records.append({
+                "date": date_str,
+                "code": code_val,
+                "disease_name": disease_name,
+                "treatment_type": treatment_type
+            })
 
-    # 데이터가 비어있을 경우 전체 페이지 텍스트 통합 분석 fallback
+    # 비상시 전체 날짜/코드 일괄 추출 (3차 보증)
     if not raw_records:
         for pdf_file in pdf_files:
-            with pdfplumber.open(pdf_file) as pdf:
-                full_text = ""
-                for page in pdf.pages:
-                    full_text += (page.extract_text() or "") + "\n"
-                
-                all_dates = sorted(list(set(re.findall(r'\d{4}[-./]\d{2}[-./]\d{2}', full_text))))
-                all_codes = list(set(re.findall(r'A[A-Z0-9]{3,5}|[A-Z]\d{2}(?:\.\d{1,2})?', full_text)))
-                
-                if all_dates:
-                    formatted_codes = [format_disease_code(c) for c in all_codes if c != 'A0000']
-                    code_str = ", ".join(formatted_codes[:3]) if formatted_codes else "-"
-                    raw_records.append({
-                        "date": all_dates[0],
-                        "end_date": all_dates[-1],
-                        "code": code_str,
-                        "disease_name": "심평원 진료 및 처방 내역",
-                        "treatment_type": "통원/입원"
-                    })
+            pdf_text = extract_all_text_from_pdf(pdf_file)
+            all_dates = sorted(list(set(re.findall(r'\d{4}[-./]\d{2}[-./]\d{2}', pdf_text))))
+            all_codes = list(set(re.findall(r'A[A-Z0-9]{3,5}|[A-Z]\d{2}(?:\.\d{1,2})?', pdf_text)))
+            
+            if all_dates:
+                formatted_codes = [format_disease_code(c) for c in all_codes if c != 'A0000']
+                code_str = ", ".join(formatted_codes[:3]) if formatted_codes else "-"
+                raw_records.append({
+                    "date": all_dates[0],
+                    "end_date": all_dates[-1],
+                    "code": code_str,
+                    "disease_name": "심평원 확인 병력 내역",
+                    "treatment_type": "통원/입원"
+                })
 
-    # 동일 질병/코드 병합 처리
+    # 동일 질병 병합
     grouped = {}
     for r in raw_records:
         key = (r["code"], r["disease_name"])
@@ -193,7 +208,7 @@ if st.button("🚀 고지 대상 추출 및 카톡 포맷 생성", type="primary
     if not uploaded_files:
         st.warning("⚠️ 심평원 PDF 파일을 최소 1개 이상 업로드해 주세요.")
     else:
-        with st.spinner("심평원 PDF 데이터를 정밀 분석 중입니다..."):
+        with st.spinner("PDF 데이터를 정밀 파싱 중입니다..."):
             try:
                 parsed_data = process_hira_pdfs(uploaded_files)
                 
