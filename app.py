@@ -46,83 +46,77 @@ uploaded_files = st.file_uploader(
 
 customer_name = st.text_input("고객명 입력", value="김태영")
 
-# 2. 질병코드 정제 함수 (예: AB351 -> B35.1)
+# 2. 질병코드 정제 함수 (예: AK047 -> K04.7 / AL600 -> L60.0)
 def format_disease_code(code_str):
     if not code_str:
         return ""
     code = code_str.strip()
+    # 심평원 접두사 A 제거
     if code.startswith('A') and len(code) >= 4:
         code = code[1:]
+    # 소수점 추가
     if len(code) > 3 and '.' not in code:
         code = code[:3] + '.' + code[3:]
     return code
 
-# 3. 심평원 PDF 표 추출 및 고지대상 분석 핵심 로직
+# 3. PDF 텍스트 정밀 파싱 알고리즘
 def process_hira_pdfs(pdf_files):
     raw_records = []
     
     for pdf_file in pdf_files:
         with pdfplumber.open(pdf_file) as pdf:
             for page in pdf.pages:
-                tables = page.extract_tables()
-                for table in tables:
-                    for row in table:
-                        if not row or len(row) < 5:
-                            continue
-                        
-                        # 행 데이터 결합 텍스트
-                        row_str = " ".join([str(cell) for cell in row if cell])
-                        
-                        # 날짜 추출 (YYYY-MM-DD)
-                        dates = re.findall(r'\d{4}-\d{2}-\d{2}', row_str)
-                        if not dates:
-                            continue
-                        
-                        date_str = dates[0]
-                        
-                        # 질병코드 추출 패턴 (예: AB351, AK047, K57.9 등)
-                        codes = re.findall(r'\b[A-Z]{1,2}\d{3,4}\b|\b[A-Z]\d{2}(?:\.\d{1,2})?\b', row_str)
-                        code_val = format_disease_code(codes[0]) if codes else ""
-                        
-                        # 입원/외래 구분
-                        treatment_type = "입원" if "입원" in row_str else "통원"
-                        
-                        # 약 복용일수 추출 (숫자)
-                        med_days = 0
-                        numbers = re.findall(r'\b\d{1,3}\b', row_str)
-                        if numbers:
-                            med_days = int(numbers[-1])
-                        
-                        # 진단명/병의원 추출
-                        disease_name = "상세 진단명 확인"
-                        for cell in row:
-                            if cell and any(keyword in cell for keyword in ["염", "전", "양", "통", "염좌", "백선", "출혈", "장애", "관리", "분만"]):
-                                disease_name = cell.replace("\n", " ").strip()
-                                break
-                        
-                        raw_records.append({
-                            "date": date_str,
-                            "code": code_val,
-                            "disease_name": disease_name,
-                            "treatment_type": treatment_type,
-                            "med_days": med_days
-                        })
-                        
-    # 질병/코드별 병합 처리
+                text = page.extract_text()
+                if not text:
+                    continue
+                
+                lines = text.split("\n")
+                for line in lines:
+                    # YYYY-MM-DD 날짜 패턴 탐색
+                    dates = re.findall(r'\b\d{4}-\d{2}-\d{2}\b', line)
+                    if not dates:
+                        continue
+                    
+                    date_str = dates[0]
+                    
+                    # 질병코드 탐색 (예: AK047, AL600, AB351, K57.9 등)
+                    codes = re.findall(r'\bA[A-Z]\d{3,4}\b|\b[A-Z]\d{2}(?:\.\d{1,2})?\b', line)
+                    code_val = format_disease_code(codes[0]) if codes else "-"
+                    
+                    # 진단명 추출 (한글 단어 위주 정제)
+                    disease_name = "상세 진단명 확인"
+                    # 심평원 한글 진단명 패턴 추출 (괄호나 양방 표기 제거 등)
+                    clean_line = re.sub(r'\(양방\)|\(한방\)', '', line)
+                    korean_words = re.findall(r'[가-힣]+', clean_line)
+                    
+                    # 의미 있는 병명 단어 필터링
+                    filtered_words = [w for w in korean_words if w not in ["외래", "입원", "일반의", "의원", "약국", "치과", "피부과", "내과", "병원", "해당없음", "주상병"]]
+                    if filtered_words:
+                        disease_name = " ".join(filtered_words[:3])
+                    
+                    # 입원/외래 구분
+                    treatment_type = "입원" if "입원" in line else "통원"
+                    
+                    raw_records.append({
+                        "date": date_str,
+                        "code": code_val,
+                        "disease_name": disease_name,
+                        "treatment_type": treatment_type
+                    })
+                    
+    # 동일 질병 및 동일 코드 병합 처리
     grouped = {}
     for r in raw_records:
-        key = r["code"] if r["code"] else r["disease_name"]
+        key = (r["code"], r["disease_name"])
         if key not in grouped:
             grouped[key] = {
                 "dates": [],
-                "disease_name": r["disease_name"],
-                "code": r["code"],
                 "types": set(),
-                "total_med": 0
+                "disease_name": r["disease_name"],
+                "code": r["code"]
             }
         grouped[key]["dates"].append(r["date"])
         grouped[key]["types"].add(r["treatment_type"])
-        grouped[key]["total_med"] += r["med_days"]
         
     final_items = []
     for key, info in grouped.items():
@@ -134,23 +128,18 @@ def process_hira_pdfs(pdf_files):
         t_type = "입원" if "입원" in info["types"] else "통원"
         visit_cnt = len(sorted_dates)
         
-        # 치료일수 및 약복용 정보 가공
         treatment_days_str = f"{t_type} {visit_cnt}일"
         if visit_cnt >= 7:
             treatment_days_str += " (동일질병 합산 7일 이상)"
             
-        med_str = f"{info['total_med']}일" if info['total_med'] > 0 else "안함 / 별도확인"
-        if info['total_med'] >= 30:
-            med_str += " (동일질병 합산 30일 이상)"
-            
         final_items.append({
             "period": period_str,
             "disease_name": info["disease_name"],
-            "code": info["code"] if info["code"] else "-",
+            "code": info["code"],
             "treatment_type": t_type,
             "treatment_days": treatment_days_str,
             "status": "완치 / 구두확인 필요",
-            "medication": med_str
+            "medication": "처방조제 내역 참조"
         })
         
     return final_items
@@ -184,15 +173,15 @@ if st.button("🚀 고지 대상 추출 및 카톡 포맷 생성", type="primary
     if not uploaded_files:
         st.warning("⚠️ 심평원 PDF 파일을 최소 1개 이상 업로드해 주세요.")
     else:
-        with st.spinner("심평원 PDF 표 데이터를 정밀 분석 및 병합 중입니다..."):
+        with st.spinner("심평원 PDF 텍스트 데이터를 정밀 파싱 중입니다..."):
             try:
                 parsed_data = process_hira_pdfs(uploaded_files)
                 
                 if not parsed_data:
-                    st.warning("⚠️ PDF 파일에서 병력 표 데이터를 인식하지 못했습니다. 파일 상태를 확인해 주세요.")
+                    st.warning("⚠️ PDF 파일에서 병력 데이터를 추출하지 못했습니다.")
                 else:
                     result_text = generate_final_kakao_text(customer_name, parsed_data)
-                    st.success("✅ 심평원 데이터 분석 및 카톡 변환이 완료되었습니다! 아래 [복사] 버튼을 누르세요.")
+                    st.success("✅ 파일 분석 및 카톡 변환이 성공적으로 완료되었습니다!")
                     st.code(result_text, language="text")
             except Exception as e:
                 st.error(f"❌ PDF 파싱 중 오류가 발생했습니다: {str(e)}")
